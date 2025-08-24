@@ -1013,7 +1013,7 @@ class MedicalPDFClaimsParser:
         # Save to Excel
         ordered_dataframe.to_excel(output_path, index=False)
         print(f'Results saved to: {output_path}')
-
+    
     def run_complete_processing(self, output_path=None):
         """
         Run the complete PDF processing workflow.
@@ -1048,6 +1048,20 @@ import cgi
 import io
 
 class handler(BaseHTTPRequestHandler):
+    def create_csv_content(all_rows):
+        if not all_rows:
+            return ""
+        
+        # Get headers from first row
+        headers = list(all_rows[0].keys())
+        
+        # Create CSV content
+        csv_lines = [','.join(headers)]
+        for row in all_rows:
+            csv_line = ','.join([str(row.get(header, '')) for header in headers])
+            csv_lines.append(csv_line)
+        
+        return '\n'.join(csv_lines)
     def do_POST(self):
         try:
             # Parse the multipart form data
@@ -1085,7 +1099,7 @@ class handler(BaseHTTPRequestHandler):
                 results_dataframe = parser.process_pdf_and_create_dataframe()
                 
                 # Convert to CSV
-                csv_content = results_dataframe.to_csv(index=False)
+                csv_content = create_csv_content(all_rows)
                 
                 # Send response
                 self.send_response(200)
