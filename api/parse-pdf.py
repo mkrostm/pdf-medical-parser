@@ -24,7 +24,7 @@ import tempfile
 import cgi
 import io
 import fitz
-import pandas
+
 class MedicalPDFClaimsParser:
     """
     A class for parsing medical PDF documents to extract patient claims information.
@@ -826,6 +826,115 @@ class MedicalPDFClaimsParser:
             
         return ",".join(ordered_values)
 
+    def create_csv_content(self, all_rows):
+        """
+        Create CSV content directly without pandas dependency.
+        
+        Args:
+            all_rows (list): List of dictionaries containing extracted data
+            
+        Returns:
+            str: CSV formatted content
+        """
+        if not all_rows:
+            return ""
+        
+        # Get headers from first row
+        headers = list(all_rows[0].keys())
+        
+        # Escape CSV values that contain commas or quotes
+        def escape_csv_value(value):
+            value_str = str(value)
+            if ',' in value_str or '"' in value_str or '\n' in value_str:
+                # Escape quotes by doubling them and wrap in quotes
+                escaped_value = value_str.replace('"', '""')
+                return f'"{escaped_value}"'
+            return value_str
+        
+        # Create CSV content
+        csv_lines = [','.join(headers)]
+        for row in all_rows:
+            csv_line = ','.join([escape_csv_value(row.get(header, '')) for header in headers])
+            csv_lines.append(csv_line)
+        
+        return '\n'.join(csv_lines)
+
+    def process_pdf_and_create_csv(self):
+        """
+        Process the entire PDF and create CSV content with extracted data.
+        
+        This method orchestrates the complete processing workflow, from reading
+        the PDF to creating the final CSV output.
+        
+        Returns:
+            str: CSV formatted content containing all extracted patient data
+        """
+        print(f"Starting PDF processing: {self.pdf_path}")
+        start_time = time.perf_counter()
+        
+        all_rows = []
+        
+        # Process each patient block
+        for block_number, patient_block in enumerate(self.iterate_all_patient_blocks(), start=1):
+            processed_rows = self.process_individual_patient_block(patient_block)
+            all_rows.extend(processed_rows)
+        
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+        elapsed_minutes = elapsed_time / 60
+        
+        print(f"Processing completed in {elapsed_time:.6f} seconds ({elapsed_minutes:.2f} minutes)")
+        print(f"Extracted {len(all_rows)} patient records")
+        
+        # Create CSV content
+        csv_content = self.create_csv_content(all_rows)
+        return csv_content
+
+    def save_results_to_csv(self, csv_content, output_path=None):
+        """
+        Save the processed results to a CSV file.
+        
+        Args:
+            csv_content (str): The CSV formatted content
+            output_path (str, optional): Custom output path. If None, uses input filename
+        """
+        if output_path is None:
+            input_path = Path(self.pdf_path)
+            output_path = input_path.with_suffix('.csv')
+        
+        # Save to CSV
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(csv_content)
+        
+        print(f'Results saved to: {output_path}')
+
+    def run_complete_processing(self, output_path=None):
+        """
+        Run the complete PDF processing workflow.
+        
+        This is the main entry point that handles the entire process from
+        PDF reading to CSV output generation.
+        
+        Args:
+            output_path (str, optional): Custom output path for CSV file
+            
+        Returns:
+            str: The CSV formatted content
+        """
+        try:
+            # Process PDF and create CSV content
+            csv_content = self.process_pdf_and_create_csv()
+            
+            # Save results to CSV
+            self.save_results_to_csv(csv_content, output_path)
+            
+            return csv_content
+            
+        except Exception as error:
+            print(f"Error during processing: {str(error)}")
+            raise
+        
+
     def process_individual_patient_block(self, block_tuple):
         """
         Process an individual patient block to extract all relevant information.
@@ -943,102 +1052,11 @@ class MedicalPDFClaimsParser:
 
         return [final_data]
 
-    def process_pdf_and_create_dataframe(self):
-        """
-        Process the entire PDF and create a pandas DataFrame with extracted data.
-        
-        This method orchestrates the complete processing workflow, from reading
-        the PDF to creating the final structured output.
-        
-        Returns:
-            pandas.DataFrame: DataFrame containing all extracted patient data
-        """
-        print(f"Starting PDF processing: {self.pdf_path}")
-        start_time = time.perf_counter()
-        
-        all_rows = []
-        
-        # Process each patient block
-        for block_number, patient_block in enumerate(self.iterate_all_patient_blocks(), start=1):
-            processed_rows = self.process_individual_patient_block(patient_block)
-            all_rows.extend(processed_rows)
-        
-        # Create DataFrame
-        if all_rows:
-            dataframe = pandas.DataFrame(all_rows, columns=all_rows[0].keys())
-        else:
-            # Create empty DataFrame with expected columns
-            expected_columns = list(self.FIELD_EXTRACTION_PATTERNS.keys()) + \
-                             list(self.CLAIM_REFERENCE_PATTERNS.keys()) + \
-                             list(self.HEADER_FIELD_PATTERNS.keys()) + \
-                             ['Date Of Service', 'Service Code', 'Modifier']
-            dataframe = pandas.DataFrame(columns=expected_columns)
-        
-        end_time = time.perf_counter()
-        elapsed_time = end_time - start_time
-        elapsed_minutes = elapsed_time / 60
-        
-        print(f"Processing completed in {elapsed_time:.6f} seconds ({elapsed_minutes:.2f} minutes)")
-        print(f"Extracted {len(all_rows)} patient records")
-        print(f"DataFrame shape: {dataframe.shape}")
-        
-        return dataframe
-
-    def save_results_to_excel(self, dataframe, output_path=None):
-        """
-        Save the processed results to an Excel file.
-        
-        Args:
-            dataframe (pandas.DataFrame): The processed data
-            output_path (str, optional): Custom output path. If None, uses input filename
-        """
-        # NEW: Auto-generate output filename from input filename
-        if output_path is None:
-            input_path = Path(self.pdf_path)
-            output_path = input_path.with_suffix('.xlsx')
-        
-        # Define column order for output
-        column_order = [
-            'Patient Name', 'Patient ID', 'Provider Name', 'Provider ID',
-            'CLAIM STATUS', 'Claim Number', 'Orig Ref Num', 'Patient CTRL',
-            'Provider CTRL', 'Date Of Service', 'Service Code', 'Modifier',
-            'Charge', 'Payment', 'PAYEE', 'PAYEE ID', 'VENDOR', 'Pay Date',
-            'CHECK/EFT', 'CHECK/EFT Date',
-        ]
-        
-        # Reorder columns (only include columns that exist in the dataframe)
-        available_columns = [col for col in column_order if col in dataframe.columns]
-        ordered_dataframe = dataframe[available_columns]
-        
-        # Save to Excel
-        ordered_dataframe.to_excel(output_path, index=False)
-        print(f'Results saved to: {output_path}')
     
-    def run_complete_processing(self, output_path=None):
-        """
-        Run the complete PDF processing workflow.
-        
-        This is the main entry point that handles the entire process from
-        PDF reading to Excel output generation.
-        
-        Args:
-            output_path (str, optional): Custom output path for Excel file
-            
-        Returns:
-            pandas.DataFrame: The processed data
-        """
-        try:
-            # Process PDF and create DataFrame
-            dataframe = self.process_pdf_and_create_dataframe()
-            
-            # Save results to Excel
-            self.save_results_to_excel(dataframe, output_path)
-            
-            return dataframe
-            
-        except Exception as error:
-            print(f"Error during processing: {str(error)}")
-            raise
+
+    
+    
+    
 
 from http.server import BaseHTTPRequestHandler
 import json
@@ -1048,20 +1066,7 @@ import cgi
 import io
 
 class handler(BaseHTTPRequestHandler):
-    def create_csv_content(all_rows):
-        if not all_rows:
-            return ""
-        
-        # Get headers from first row
-        headers = list(all_rows[0].keys())
-        
-        # Create CSV content
-        csv_lines = [','.join(headers)]
-        for row in all_rows:
-            csv_line = ','.join([str(row.get(header, '')) for header in headers])
-            csv_lines.append(csv_line)
-        
-        return '\n'.join(csv_lines)
+    
     def do_POST(self):
         try:
             # Parse the multipart form data
@@ -1096,10 +1101,9 @@ class handler(BaseHTTPRequestHandler):
                 parser = MedicalPDFClaimsParser(temp_pdf_path)
                 
                 # Process PDF
-                results_dataframe = parser.process_pdf_and_create_dataframe()
+                csv_content = parser.process_pdf_and_create_csv()
                 
-                # Convert to CSV
-                csv_content = create_csv_content(all_rows)
+                
                 
                 # Send response
                 self.send_response(200)
